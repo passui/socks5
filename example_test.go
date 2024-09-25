@@ -3,7 +3,7 @@ package socks5_test
 import (
 	"log"
 
-	"github.com/txthinking/socks5"
+	"github.com/passui/socks5"
 )
 
 func ExampleServer() {
