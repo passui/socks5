@@ -90,6 +90,8 @@ type Request struct {
 	Atyp    byte
 	DstAddr []byte
 	DstPort []byte // 2 bytes
+
+	Username string
 }
 
 // Reply is the reply packet

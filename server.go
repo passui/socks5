@@ -23,8 +23,6 @@ var (
 
 // Server is socks5 server wrapper
 type Server struct {
-	UserName          string
-	Password          string
 	Method            byte
 	SupportedCommands []byte
 	Addr              string
@@ -48,7 +46,7 @@ type UDPExchange struct {
 }
 
 // NewClassicServer return a server which allow none method
-func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeout int) (*Server, error) {
+func NewClassicServer(addr, ip string, tcpTimeout, udpTimeout int) (*Server, error) {
 	_, p, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -57,17 +55,11 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 	if err != nil {
 		return nil, err
 	}
-	m := MethodNone
-	if username != "" && password != "" {
-		m = MethodUsernamePassword
-	}
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
 	cs1 := cache.New(cache.NoExpiration, cache.NoExpiration)
 	cs2 := cache.New(cache.NoExpiration, cache.NoExpiration)
 	s := &Server{
-		Method:            m,
-		UserName:          username,
-		Password:          password,
+		Method:            MethodUsernamePassword,
 		SupportedCommands: []byte{CmdConnect, CmdUDP},
 		Addr:              addr,
 		ServerAddr:        saddr,
@@ -84,52 +76,34 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 // Negotiate handle negotiate packet.
 // This method do not handle gssapi(0x01) method now.
 // Error or OK both replied.
-func (s *Server) Negotiate(rw io.ReadWriter) error {
-	rq, err := NewNegotiationRequestFrom(rw)
-	if err != nil {
-		return err
-	}
-	var got bool
-	var m byte
-	for _, m = range rq.Methods {
-		if m == s.Method {
-			got = true
-		}
-	}
-	if !got {
+func (s *Server) Negotiate(rw io.ReadWriter) (string, error) {
+	var uname string
+	if s.Method != MethodUsernamePassword {
 		rp := NewNegotiationReply(MethodUnsupportAll)
 		if _, err := rp.WriteTo(rw); err != nil {
-			return err
+			return "", err
 		}
-	}
-	rp := NewNegotiationReply(s.Method)
-	if _, err := rp.WriteTo(rw); err != nil {
-		return err
-	}
-
-	if s.Method == MethodUsernamePassword {
+	} else {
+		rp := NewNegotiationReply(s.Method)
+		if _, err := rp.WriteTo(rw); err != nil {
+			return "", err
+		}
 		urq, err := NewUserPassNegotiationRequestFrom(rw)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if string(urq.Uname) != s.UserName || string(urq.Passwd) != s.Password {
-			urp := NewUserPassNegotiationReply(UserPassStatusFailure)
-			if _, err := urp.WriteTo(rw); err != nil {
-				return err
-			}
-			return ErrUserPassAuth
-		}
+		uname = string(urq.Uname)
 		urp := NewUserPassNegotiationReply(UserPassStatusSuccess)
 		if _, err := urp.WriteTo(rw); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return nil
+	return uname, nil
 }
 
 // GetRequest get request packet from client, and check command according to SupportedCommands
 // Error replied.
-func (s *Server) GetRequest(rw io.ReadWriter) (*Request, error) {
+func (s *Server) GetRequest(rw io.ReadWriter, uname string) (*Request, error) {
 	r, err := NewRequestFrom(rw)
 	if err != nil {
 		return nil, err
@@ -153,6 +127,7 @@ func (s *Server) GetRequest(rw io.ReadWriter) (*Request, error) {
 		}
 		return nil, ErrUnsupportCmd
 	}
+	r.Username = uname
 	return r, nil
 }
 
@@ -180,11 +155,12 @@ func (s *Server) ListenAndServe(h Handler) error {
 				}
 				go func(c *net.TCPConn) {
 					defer c.Close()
-					if err := s.Negotiate(c); err != nil {
+					uname, err := s.Negotiate(c)
+					if err != nil {
 						log.Println(err)
 						return
 					}
-					r, err := s.GetRequest(c)
+					r, err := s.GetRequest(c, uname)
 					if err != nil {
 						log.Println(err)
 						return
